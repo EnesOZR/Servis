@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Servis Güzergah Yönetimi</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- LeafletJS CSS for Map -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+        #map {
+            height: 100vh;
+            width: 100vw;
+            z-index: 10;
+        }
+        #branding-banner {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            background-color: rgba(0, 0, 0, 1); /* bg-black/100 */
+            padding: 0.2rem; /* p-2 */
+            text-align: center;
+            z-index: 20;
+        }
+        .passenger-marker {
+            background-color: #ffffff;
+            color: #111827;
+            border: 4px solid;
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 14px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+            transition: all 0.3s ease;
+        }
+        .marker-blink {
+            animation: blink-animation 1.5s infinite;
+        }
+        @keyframes blink-animation {
+            0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7); }
+            70% { box-shadow: 0 0 0 12px rgba(34, 197, 94, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+        }
+        .leaflet-popup-content-wrapper {
+            background-color: #1f2937;
+            color: #f3f4f6;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.4);
+        }
+        .leaflet-popup-content { margin: 16px; font-size: 14px; line-height: 1.6; }
+        .leaflet-popup-tip { background-color: #1f2937; }
+        .leaflet-container a.leaflet-popup-close-button { color: #d1d5db; padding: 8px 8px 0 0; }
+        .leaflet-container a.leaflet-popup-close-button:hover { color: #ffffff; background-color: transparent; }
+        .filter-checkbox + label {
+            border-color: #4b5563;
+            color: #d1d5db;
+        }
+        .filter-checkbox:checked + label { 
+            background-color: #4f46e5; 
+            border-color: #4f46e5; 
+            color: #ffffff; 
+        }
+        #filter-chevron.rotate-180 { transform: rotate(180deg); }
+        .leaflet-div-icon-confirm { background: none; border: none; }
+        .shift-order-input {
+            width: 40px;
+            text-align: center;
+            background-color: #4b5563;
+            border: 1px solid #6b7280;
+            border-radius: 0.375rem;
+            color: white;
+            padding: 4px;
+        }
+        .shift-time-input {
+            background-color: transparent;
+            border: none;
+            color: #9ca3af;
+            text-align: center;
+            width: 110px;
+            cursor: pointer;
+        }
+        .shift-time-input:focus {
+            outline: none;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800 overflow-hidden">
+
+    <div id="map"></div>
+
+    <div id="loading-overlay" class="absolute inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50">
+        <p class="text-white text-2xl font-bold">Yükleniyor...</p>
+    </div>
+
+    <div class="absolute top-4 left-4 z-20 flex flex-col gap-4 w-64">
+        <div id="clock-container" class="bg-black/70 backdrop-blur-sm p-3 rounded-lg shadow-lg">
+            <p id="clock" class="text-white font-bold text-lg text-center"></p>
+        </div>
+        <div id="filter-container" class="bg-black/70 backdrop-blur-sm rounded-lg shadow-lg overflow-hidden">
+            <div id="filter-header" class="flex justify-between items-center p-3 cursor-pointer">
+                <h3 class="font-bold text-md text-white">Filtrele</h3>
+                <svg id="filter-chevron" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-white transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" /></svg>
+            </div>
+            <div id="filter-content" class="p-4 pt-0 hidden">
+                 <div class="grid grid-cols-2 gap-2 text-sm">
+                    <div><input type="checkbox" id="filter-all" value="all" class="filter-checkbox hidden" checked><label for="filter-all" class="cursor-pointer p-2 rounded-md border block text-center transition-colors">Tümü</label></div>
+                    <div><input type="checkbox" id="filter-active" value="active" class="filter-checkbox hidden"><label for="filter-active" class="cursor-pointer p-2 rounded-md border block text-center transition-colors">Gelecekler</label></div>
+                    <div><input type="checkbox" id="filter-morning" value="morning" class="filter-checkbox hidden"><label for="filter-morning" class="cursor-pointer p-2 rounded-md border block text-center transition-colors">Sabah</label></div>
+                    <div><input type="checkbox" id="filter-middle" value="middle" class="filter-checkbox hidden"><label for="filter-middle" class="cursor-pointer p-2 rounded-md border block text-center transition-colors">Orta</label></div>
+                    <div><input type="checkbox" id="filter-night" value="night" class="filter-checkbox hidden"><label for="filter-night" class="cursor-pointer p-2 rounded-md border block text-center transition-colors">Gece</label></div>
+                    <div><input type="checkbox" id="filter-off-day" value="off-day" class="filter-checkbox hidden"><label for="filter-off-day" class="cursor-pointer p-2 rounded-md border block text-center transition-colors">İzinliler</label></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="slidePanelBg" class="fixed inset-0 bg-black bg-opacity-60 z-40 hidden transition-opacity duration-300">
+        <div id="slidePanel" class="absolute top-0 right-0 h-full w-full max-w-md bg-gray-800 text-white shadow-2xl transform translate-x-full transition-transform duration-300 ease-in-out">
+            <div class="h-full flex flex-col">
+                <div class="flex justify-between items-center p-4 border-b border-gray-700">
+                    <h2 id="formTitle" class="text-xl font-bold"></h2>
+                    <button id="closeSlidePanelBtn" class="p-2 rounded-full hover:bg-gray-700 transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                    </button>
+                </div>
+                <div class="p-6 overflow-y-auto flex-grow" id="slidePanelFormContent"></div>
+            </div>
+        </div>
+    </div>
+    
+    <div id="confirmDialog" class="fixed inset-0 z-50 hidden items-center justify-center bg-black bg-opacity-70">
+        <div class="bg-gray-800 rounded-2xl shadow-xl p-8 max-w-sm w-full text-center">
+            <h3 class="text-lg font-semibold text-white mb-4">Emin misiniz?</h3>
+            <p id="confirmDialogText" class="text-gray-300 mb-6"></p>
+            <div class="flex justify-center gap-4">
+                <button id="cancelDeleteBtn" class="px-6 py-2 rounded-lg bg-gray-600 hover:bg-gray-500 font-semibold transition-colors">İptal</button>
+                <button id="confirmDeleteBtn" class="px-6 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold transition-colors">Sil</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="fixed bottom-5 left-1/2 -translate-x-1/2 px-6 py-3 rounded-lg shadow-lg opacity-0 translate-y-10 transition-all duration-300 z-50"></div>
+
+    <div id="branding-banner" class="absolute bottom-0 left-0 w-full bg-black/100 p-1 text-center z-20">
+        <p class="text-white font-semibold text-sm">oz3R Inc</p>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+
+    <script>
+    const App = {
+        state: {
+            map: null,
+            db: null,
+            allPassengers: [],
+            visibleMarkers: [],
+            tempMarker: null,
+            lastClickedLatLng: null,
+            editingPassengerId: null,
+            deleteTargetId: null,
+            currentFilters: new Set(['all']),
+            timeOffset: 0,
+            clockInterval: null,
+            isPanelOpen: false,
+        },
+
+        SHIFT_DEFAULTS: {
+            morning: { name: "Sabah", start: '08:00', end: '16:00' },
+            middle: { name: "Orta", start: '16:00', end: '00:00' },
+            night: { name: "Gece", start: '00:00', end: '08:00' }
+        },
+
+        init() {
+            this.dom.cache();
+            this.setupFirebase();
+            this.setupMap();
+            this.setupEventListeners();
+            this.services.loadPassengers();
+            this.services.startTimeService();
+        },
+
+        dom: {
+            elements: {},
+            cache: () => {
+                const ids = ['loading-overlay', 'clock', 'filter-container', 'filter-header', 'filter-content', 'filter-chevron', 'slidePanelBg', 'slidePanel', 'formTitle', 'slidePanelFormContent', 'closeSlidePanelBtn', 'confirmDialog', 'confirmDialogText', 'confirmDeleteBtn', 'cancelDeleteBtn', 'toast'];
+                ids.forEach(id => {
+                    const camelCaseId = id.replace(/-([a-z])/g, g => g[1].toUpperCase());
+                    App.dom.elements[camelCaseId] = document.getElementById(id);
+                });
+            }
+        },
+
+        setupFirebase: () => {
+            const firebaseConfig = {
+                apiKey: "AIzaSyBgcQQexhreb-k68wpHZMi_mjLk36x-NR0",
+                authDomain: "enes-ozer.firebaseapp.com",
+                projectId: "enes-ozer",
+                storageBucket: "enes-ozer.appspot.com",
+            };
+            firebase.initializeApp(firebaseConfig);
+            App.state.db = firebase.firestore();
+        },
+
+        setupMap: () => {
+            App.state.map = L.map('map', { zoomControl: false }).setView([41.0082, 28.9784], 11);
+            L.control.zoom({ position: 'bottomright' }).addTo(App.state.map);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '', // Removed default attribution
+                maxZoom: 19
+            }).addTo(App.state.map);
+        },
+
+        setupEventListeners: () => {
+            App.state.map.on('click', (e) => App.handlers.onMapClick(e));
+            App.dom.elements.filterHeader.addEventListener('click', () => App.ui.toggleFilterPanel());
+            App.dom.elements.filterContainer.addEventListener('change', (e) => App.handlers.onFilterChange(e));
+            App.dom.elements.closeSlidePanelBtn.addEventListener('click', () => App.ui.closePanel());
+            App.dom.elements.slidePanelBg.addEventListener('click', (e) => {
+                if (e.target === App.dom.elements.slidePanelBg) App.ui.closePanel();
+            });
+            App.dom.elements.cancelDeleteBtn.addEventListener('click', () => App.ui.closeConfirmDialog());
+            App.dom.elements.confirmDeleteBtn.addEventListener('click', () => App.handlers.onConfirmDelete());
+            document.addEventListener('click', (e) => App.handlers.onDocumentClick(e));
+        },
+
+        handlers: {
+            onMapClick: (e) => {
+                if (e.originalEvent.target.closest('.leaflet-marker-icon')) return;
+                if (App.state.isPanelOpen || (App.state.map._popup && App.state.map._popup.isOpen())) return;
+                
+                if (App.state.tempMarker) {
+                    App.state.map.removeLayer(App.state.tempMarker);
+                }
+
+                App.state.lastClickedLatLng = e.latlng;
+                
+                const tempIcon = L.divIcon({
+                    className: 'leaflet-div-icon-confirm',
+                    html: `
+                        <div class="passenger-marker border-indigo-500 relative flex items-center justify-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                            <button class="confirm-location-btn absolute -top-2 -right-2 bg-green-500 text-white w-7 h-7 rounded-full flex items-center justify-center shadow-lg hover:bg-green-600 transition-transform hover:scale-110">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" /></svg>
+                            </button>
+                        </div>`,
+                    iconSize: [44, 44], iconAnchor: [22, 44]
+                });
+
+                App.state.tempMarker = L.marker(e.latlng, { icon: tempIcon }).addTo(App.state.map);
+            },
+
+            onFilterChange: (e) => {
+                if (!e.target.matches('.filter-checkbox')) return;
+                const { value, checked } = e.target;
+                const allCheckbox = App.dom.elements.filterContainer.querySelector('#filter-all');
+                
+                if (value === 'all' && checked) {
+                    App.state.currentFilters.clear();
+                    App.state.currentFilters.add('all');
+                    App.dom.elements.filterContainer.querySelectorAll('.filter-checkbox').forEach(cb => {
+                        if (cb.value !== 'all') cb.checked = false;
+                    });
+                } else {
+                    allCheckbox.checked = false;
+                    App.state.currentFilters.delete('all');
+                    if (checked) App.state.currentFilters.add(value);
+                    else App.state.currentFilters.delete(value);
+                }
+                if (App.state.currentFilters.size === 0) {
+                    allCheckbox.checked = true;
+                    App.state.currentFilters.add('all');
+                }
+                App.ui.renderMarkers();
+            },
+
+            onDocumentClick: (e) => {
+                const target = e.target.closest('.edit-btn, .delete-btn, .confirm-location-btn');
+                if (!target) return;
+
+                if (target.matches('.edit-btn')) {
+                    const passenger = App.state.allPassengers.find(p => p.docId === target.dataset.id);
+                    if (passenger) {
+                        App.state.map.closePopup();
+                        App.ui.openPanel(passenger);
+                    }
+                } else if (target.matches('.delete-btn')) {
+                    const passenger = App.state.allPassengers.find(p => p.docId === target.dataset.id);
+                    if(passenger) {
+                        App.state.map.closePopup();
+                        App.state.deleteTargetId = target.dataset.id;
+                        App.ui.openConfirmDialog(`'${App.utils.sanitizeHTML(passenger.info.name)}' adlı yolcuyu silmek istediğinizden emin misiniz?`);
+                    }
+                } else if (target.matches('.confirm-location-btn')) {
+                    e.stopPropagation();
+                    App.ui.openPanel();
+                }
+            },
+
+            onFormSubmit: async (e) => {
+                e.preventDefault();
+                const form = e.target;
+                const submitButton = form.querySelector('button[type="submit"]');
+                submitButton.disabled = true;
+                submitButton.textContent = 'Kaydediliyor...';
+
+                let passengerLocation;
+                if (App.state.lastClickedLatLng) {
+                    passengerLocation = { lat: App.state.lastClickedLatLng.lat, lng: App.state.lastClickedLatLng.lng };
+                } else {
+                    const passengerToUpdate = App.state.allPassengers.find(p => p.docId === App.state.editingPassengerId);
+                    if (!passengerToUpdate) {
+                        App.ui.showToast('Yolcu konumu bulunamadı.', 'error');
+                        submitButton.disabled = false;
+                        submitButton.textContent = 'Güncelle';
+                        return;
+                    }
+                    passengerLocation = passengerToUpdate.info.location;
+                }
+
+                const shifts = [];
+                form.querySelectorAll('.shift-block').forEach(block => {
+                    const order = parseInt(block.querySelector('.shift-order-input').value, 10);
+                    if (!isNaN(order) && order > 0) {
+                        shifts.push({
+                            key: block.dataset.shiftKey,
+                            name: App.SHIFT_DEFAULTS[block.dataset.shiftKey].name,
+                            start: block.querySelector('.start-time').value,
+                            end: block.querySelector('.end-time').value,
+                            order: order
+                        });
+                    }
+                });
+
+                if (shifts.length === 0) {
+                     App.ui.showToast('En az bir vardiya için sıra numarası girilmelidir.', 'error');
+                     submitButton.disabled = false;
+                     submitButton.textContent = App.state.editingPassengerId ? 'Güncelle' : 'Kaydet';
+                     return;
+                }
+
+                const passengerInfo = {
+                    name: App.utils.sanitizeHTML(form.querySelector('#passengerName').value.trim()),
+                    holidayDay: form.querySelector('#holidayDay').value,
+                    cycleLengthWeeks: parseInt(form.querySelector('#cycleLengthWeeks').value, 10),
+                    cycleStartDate: form.querySelector('#cycleStartDate').value,
+                    shifts: shifts,
+                    location: passengerLocation
+                };
+
+                try {
+                    if (App.state.editingPassengerId) {
+                        await App.services.updatePassenger(App.state.editingPassengerId, passengerInfo);
+                        App.ui.showToast('Yolcu güncellendi.', 'success');
+                    } else {
+                        await App.services.addPassenger(passengerInfo);
+                        App.ui.showToast('Yolcu eklendi.', 'success');
+                    }
+                    App.ui.closePanel();
+                } catch (error) {
+                    console.error("Error saving passenger: ", error);
+                    App.ui.showToast("Kaydederken bir hata oluştu.", 'error');
+                } finally {
+                     submitButton.disabled = false;
+                     submitButton.textContent = App.state.editingPassengerId ? 'Güncelle' : 'Kaydet';
+                }
+            },
+
+            onConfirmDelete: async () => {
+                if (App.state.deleteTargetId) {
+                    try {
+                        await App.services.deletePassenger(App.state.deleteTargetId);
+                        App.ui.showToast('Yolcu silindi.', 'success');
+                    } catch (error) {
+                        console.error("Error deleting passenger: ", error);
+                        App.ui.showToast("Silerken bir hata oluştu.", 'error');
+                    } finally {
+                        App.ui.closeConfirmDialog();
+                    }
+                }
+            }
+        },
+
+        services: {
+            startTimeService: () => {
+                const update = async () => {
+                    try {
+                        const response = await fetch('https://worldtimeapi.org/api/timezone/Europe/Istanbul');
+                        if (!response.ok) throw new Error('API response not OK');
+                        const data = await response.json();
+                        const serverTime = new Date(data.datetime).getTime();
+                        App.state.timeOffset = serverTime - Date.now();
+                    } catch (error) {
+                        console.error("Could not fetch server time, using local time.", error);
+                        App.state.timeOffset = 0;
+                    }
+
+                    if (App.state.clockInterval) clearInterval(App.state.clockInterval);
+                    App.state.clockInterval = setInterval(() => {
+                        App.ui.renderClock();
+                        if (new Date(Date.now() + App.state.timeOffset).getSeconds() === 0) {
+                             App.ui.renderMarkers();
+                        }
+                    }, 1000);
+                };
+                update();
+            },
+
+            loadPassengers: () => {
+                App.state.db.collection('passengers').onSnapshot(snapshot => {
+                    App.state.allPassengers = [];
+                    snapshot.forEach(doc => {
+                        const data = doc.data();
+                        if (data.location?.lat && data.location?.lng) {
+                            App.state.allPassengers.push({ info: data, docId: doc.id });
+                        }
+                    });
+                    App.ui.renderMarkers();
+                    App.dom.elements.loadingOverlay.style.display = 'none';
+                }, error => {
+                    console.error("Error fetching passengers: ", error);
+                    App.ui.showToast("Yolcu verileri alınamadı.", "error");
+                    App.dom.elements.loadingOverlay.style.display = 'none';
+                });
+            },
+
+            addPassenger: (data) => App.state.db.collection('passengers').add(data),
+            updatePassenger: (id, data) => App.state.db.collection('passengers').doc(id).update(data),
+            deletePassenger: (id) => App.state.db.collection('passengers').doc(id).delete()
+        },
+
+        ui: {
+            renderClock: () => {
+                const now = new Date(Date.now() + App.state.timeOffset);
+                const options = { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' };
+                App.dom.elements.clock.textContent = now.toLocaleDateString('tr-TR', options).replace(',', '');
+            },
+
+            renderMarkers: () => {
+                App.state.visibleMarkers.forEach(m => App.state.map.removeLayer(m));
+                App.state.visibleMarkers = [];
+                const now = new Date(Date.now() + App.state.timeOffset);
+
+                App.state.allPassengers.forEach(pData => {
+                    const { status, shift } = App.utils.getMarkerStatus(pData.info, now);
+                    
+                    const showAll = App.state.currentFilters.has('all');
+                    const showActive = App.state.currentFilters.has('active') && status === 'active';
+                    const showOffDay = App.state.currentFilters.has('off-day') && status === 'off-day';
+                    const showShiftKey = App.state.currentFilters.has(shift?.key);
+
+                    if (showAll || showActive || showOffDay || showShiftKey) {
+                        const marker = App.utils.createPassengerMarker(pData.info, pData.docId, now);
+                        marker.addTo(App.state.map);
+                        App.state.visibleMarkers.push(marker);
+                    }
+                });
+            },
+            
+            toggleFilterPanel: () => {
+                App.dom.elements.filterContent.classList.toggle('hidden');
+                App.dom.elements.filterChevron.classList.toggle('rotate-180');
+            },
+            
+            openPanel: (passengerData = null) => {
+                App.state.editingPassengerId = passengerData ? passengerData.docId : null;
+                App.dom.elements.formTitle.textContent = passengerData ? 'Yolcu Bilgilerini Düzenle' : 'Yeni Yolcu Ekle';
+                App.dom.elements.slidePanelFormContent.innerHTML = App.utils.getFormHTML(passengerData);
+                App.dom.elements.slidePanelFormContent.querySelector('#passengerForm').addEventListener('submit', (e) => App.handlers.onFormSubmit(e));
+                
+                App.dom.elements.slidePanelBg.classList.remove('hidden');
+                setTimeout(() => {
+                    App.state.isPanelOpen = true;
+                    App.dom.elements.slidePanelBg.classList.add('bg-opacity-60');
+                    App.dom.elements.slidePanel.classList.remove('translate-x-full');
+                }, 10);
+            },
+
+            closePanel: () => {
+                App.dom.elements.slidePanelBg.classList.remove('bg-opacity-60');
+                App.dom.elements.slidePanel.classList.add('translate-x-full');
+                setTimeout(() => {
+                    App.dom.elements.slidePanelBg.classList.add('hidden');
+                    if (App.state.tempMarker) {
+                        App.state.map.removeLayer(App.state.tempMarker);
+                        App.state.tempMarker = null;
+                    }
+                    App.state.lastClickedLatLng = null;
+                    App.state.editingPassengerId = null;
+                    App.state.isPanelOpen = false;
+                }, 300);
+            },
+
+            openConfirmDialog: (text) => {
+                App.dom.elements.confirmDialogText.textContent = text;
+                App.dom.elements.confirmDialog.classList.remove('hidden');
+                App.dom.elements.confirmDialog.classList.add('flex');
+            },
+
+            closeConfirmDialog: () => {
+                App.dom.elements.confirmDialog.classList.add('hidden');
+                App.dom.elements.confirmDialog.classList.remove('flex');
+                App.state.deleteTargetId = null;
+            },
+
+            showToast: (message, type = 'info') => {
+                const toast = App.dom.elements.toast;
+                toast.textContent = message;
+                toast.className = 'fixed bottom-5 left-1/2 -translate-x-1/2 px-6 py-3 rounded-lg shadow-lg opacity-0 translate-y-10 transition-all duration-300 z-50';
+                
+                const colors = {
+                    success: ['bg-green-600', 'text-white'],
+                    error: ['bg-red-600', 'text-white'],
+                    info: ['bg-blue-600', 'text-white']
+                };
+                const colorClasses = colors[type] || colors.info;
+                toast.classList.add(...colorClasses);
+                
+                toast.classList.remove('opacity-0', 'translate-y-10');
+                setTimeout(() => toast.classList.add('opacity-0', 'translate-y-10'), 3000);
+            }
+        },
+
+        utils: {
+            sanitizeHTML: (str) => {
+                const temp = document.createElement('div');
+                temp.textContent = str;
+                return temp.innerHTML;
+            },
+
+            getInitials: (name) => (name || '').split(' ').map(part => part[0]).join('').toUpperCase(),
+            
+            getShiftColor: (shiftKey) => ({ morning: "#f59e0b", middle: "#3b82f6", night: "#8b5cf6" }[shiftKey] || "#6b7280"),
+
+            getMarkerStatus: (passengerInfo, dateObject) => {
+                const now = dateObject;
+                const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+                const today = dayNames[now.getDay()];
+                const currentShift = App.utils.calculateCurrentShift(passengerInfo, now);
+
+                if (today === passengerInfo.holidayDay || !currentShift) return { status: 'off-day', shift: currentShift };
+                
+                const timeToMinutes = (t) => {
+                    const [h, m] = t.split(':');
+                    return parseInt(h, 10) * 60 + parseInt(m, 10);
+                };
+                const currentTimeInMinutes = now.getHours() * 60 + now.getMinutes();
+
+                let shiftToPickup = null;
+                // Use passenger-specific shift times if available, otherwise default
+                const morningStartTime = timeToMinutes(passengerInfo.shifts?.find(s=>s.key==='morning')?.start || App.SHIFT_DEFAULTS.morning.start);
+                const middleStartTime = timeToMinutes(passengerInfo.shifts?.find(s=>s.key==='middle')?.start || App.SHIFT_DEFAULTS.middle.start);
+                const nightStartTime = timeToMinutes(passengerInfo.shifts?.find(s=>s.key==='night')?.start || App.SHIFT_DEFAULTS.night.start);
+
+                if (currentTimeInMinutes >= middleStartTime || currentTimeInMinutes < nightStartTime) shiftToPickup = 'night';
+                else if (currentTimeInMinutes >= nightStartTime && currentTimeInMinutes < morningStartTime) shiftToPickup = 'morning';
+                else if (currentTimeInMinutes >= morningStartTime && currentTimeInMinutes < middleStartTime) shiftToPickup = 'middle';
+
+                return { status: (currentShift.key === shiftToPickup) ? 'active' : 'normal', shift: currentShift };
+            },
+
+            calculateCurrentShift: (passengerInfo, dateObject) => {
+                const { cycleStartDate, cycleLengthWeeks, shifts } = passengerInfo;
+                if (!cycleStartDate || !cycleLengthWeeks || !shifts?.length) return null;
+                
+                const sortedShifts = [...shifts].sort((a, b) => a.order - b.order);
+                if (sortedShifts.length === 0) return null;
+
+                const startDate = new Date(cycleStartDate);
+                const today = new Date(dateObject);
+                startDate.setHours(0, 0, 0, 0);
+                today.setHours(0, 0, 0, 0);
+                const diffWeeks = Math.floor((today - startDate) / (1000 * 60 * 60 * 24 * 7));
+                const shiftChanges = Math.floor(diffWeeks / cycleLengthWeeks);
+                
+                const newIndex = shiftChanges % sortedShifts.length;
+                return sortedShifts[newIndex];
+            },
+            
+            getCycleWeekInfo: (passengerInfo, dateObject) => {
+                const { cycleStartDate, cycleLengthWeeks } = passengerInfo;
+                if (!cycleStartDate || !cycleLengthWeeks) {
+                    return { currentWeekInCycle: 0, totalCycleWeeks: cycleLengthWeeks || 0 };
+                }
+                const startDate = new Date(cycleStartDate);
+                const today = new Date(dateObject);
+                startDate.setHours(0, 0, 0, 0);
+                today.setHours(0, 0, 0, 0);
+                const diffWeeks = Math.floor((today - startDate) / (1000 * 60 * 60 * 24 * 7));
+                const currentWeekInCycle = (diffWeeks % cycleLengthWeeks) + 1;
+                return { currentWeekInCycle, totalCycleWeeks: cycleLengthWeeks };
+            },
+
+            createPassengerMarker: (passengerInfo, docId, dateObject) => {
+                const { status, shift: currentShift } = App.utils.getMarkerStatus(passengerInfo, dateObject);
+                
+                const nextWeekDate = new Date(dateObject);
+                nextWeekDate.setDate(nextWeekDate.getDate() + 7);
+                const nextWeekShift = App.utils.calculateCurrentShift(passengerInfo, nextWeekDate);
+                
+                const { currentWeekInCycle, totalCycleWeeks } = App.utils.getCycleWeekInfo(passengerInfo, dateObject);
+
+                const initials = App.utils.getInitials(passengerInfo.name);
+                const borderColor = status === 'active' ? '#22c55e' : (status === 'off-day' ? '#6b7280' : App.utils.getShiftColor(currentShift?.key));
+                
+                const customIcon = L.divIcon({
+                    className: status === 'active' ? 'marker-blink' : '',
+                    html: `<div class="passenger-marker" style="border-color: ${borderColor};">${initials}</div>`,
+                    iconSize: [44, 44], iconAnchor: [22, 22]
+                });
+                const marker = L.marker(passengerInfo.location, { icon: customIcon });
+
+                const dayNames = { monday: "Pazartesi", tuesday: "Salı", wednesday: "Çarşamba", thursday: "Perşembe", friday: "Cuma", saturday: "Cumartesi", sunday: "Pazar" };
+                
+                const shiftTimeInfo = currentShift ? `${currentShift.start} - ${currentShift.end}` : 'Vardiyasız';
+                const cycleText = currentShift ? `(${currentWeekInCycle}/${totalCycleWeeks})` : '';
+                const nextWeekCycleText = nextWeekShift ? `(${(currentWeekInCycle % totalCycleWeeks) + 1}/${totalCycleWeeks})` : '';
+
+                const popupContent = `
+                    <div class="text-gray-200">
+                        <h3 class="text-lg font-bold text-white mb-2">${App.utils.sanitizeHTML(passengerInfo.name)}</h3>
+                        <p><strong class="font-semibold text-gray-400">Vardiya:</strong> <span style="color:${App.utils.getShiftColor(currentShift?.key)};">${currentShift?.name || 'Bilinmiyor'} ${cycleText}</span></p>
+                        <p><strong class="font-semibold text-gray-400">Saat:</strong> ${shiftTimeInfo}</p>
+                        <p class="mb-3"><strong class="font-semibold text-gray-400">İzin Günü:</strong> ${dayNames[passengerInfo.holidayDay]}</p>
+                        <p class="mt-2 pt-2 border-t border-gray-600"><strong class="font-semibold text-gray-400">Haftaya:</strong> <span style="color:${App.utils.getShiftColor(nextWeekShift?.key)};">${nextWeekShift?.name || 'Bilinmiyor'} ${nextWeekCycleText}</span></p>
+                        <div class="flex gap-2 mt-3">
+                            <button class="edit-btn text-sm bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-1 px-3 rounded-md w-full transition-colors" data-id="${docId}">Düzenle</button>
+                            <button class="delete-btn text-sm bg-red-600 hover:bg-red-700 text-white font-semibold py-1 px-3 rounded-md w-full transition-colors" data-id="${docId}">Sil</button>
+                        </div>
+                    </div>`;
+                marker.bindPopup(popupContent);
+                return marker;
+            },
+            
+            getFormHTML: (passengerData) => {
+                const pData = passengerData ? passengerData.info : {};
+                const todayISO = new Date().toISOString().split('T')[0];
+                const isEditing = !!passengerData;
+
+                const shiftBlocks = Object.keys(App.SHIFT_DEFAULTS).map(key => {
+                    const defaultShift = App.SHIFT_DEFAULTS[key];
+                    const savedShift = pData.shifts?.find(s => s.key === key);
+                    return `
+                        <div class="shift-block flex items-center justify-between p-2 rounded-md bg-gray-700" data-shift-key="${key}">
+                            <span class="font-bold text-lg" style="color: ${App.utils.getShiftColor(key)}">${defaultShift.name}</span>
+                            <div class="flex flex-col items-center">
+                                <div class="flex items-center gap-1">
+                                    <input type="time" class="shift-time-input start-time" value="${savedShift?.start || defaultShift.start}">
+                                    <span>-</span>
+                                    <input type="time" class="shift-time-input end-time" value="${savedShift?.end || defaultShift.end}">
+                                </div>
+                            </div>
+                            <input type="number" min="1" class="shift-order-input" placeholder="Sıra" value="${savedShift?.order || ''}">
+                        </div>
+                    `;
+                }).join('');
+
+                return `
+                    <form id="passengerForm" class="space-y-6 text-white">
+                        <div>
+                            <label for="passengerName" class="block text-sm font-medium">Ad Soyad</label>
+                            <input type="text" id="passengerName" required value="${App.utils.sanitizeHTML(pData.name || '')}" placeholder="Örn: Ali Veli" class="mt-1 block w-full bg-gray-700 border-gray-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm h-10 px-3">
+                        </div>
+                        <div>
+                            <label for="holidayDay" class="block text-sm font-medium">İzin Günü</label>
+                            <select id="holidayDay" class="mt-1 block w-full bg-gray-700 border-gray-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm h-10 px-2">
+                                ${Object.entries({ monday: "Pazartesi", tuesday: "Salı", wednesday: "Çarşamba", thursday: "Perşembe", friday: "Cuma", saturday: "Cumartesi", sunday: "Pazar" })
+                                .map(([key, value]) => `<option value="${key}" ${pData.holidayDay === key ? 'selected' : ''}>${value}</option>`).join('')}
+                            </select>
+                        </div>
+                        <fieldset>
+                            <legend class="text-base font-semibold mb-2 border-b border-gray-600 pb-2">Döngü Bilgileri</legend>
+                            <div class="space-y-4 pt-2">
+                                <div>
+                                    <label for="cycleLengthWeeks" class="block text-sm font-medium">Döngü Süresi (Hafta)</label>
+                                    <input type="number" id="cycleLengthWeeks" required value="${pData.cycleLengthWeeks || '1'}" min="1" class="mt-1 block w-full bg-gray-700 border-gray-600 rounded-md sm:text-sm h-10 px-3">
+                                </div>
+                                 <div>
+                                    <label for="cycleStartDate" class="block text-sm font-medium">Döngü Başlangıç Tarihi</label>
+                                    <input type="date" id="cycleStartDate" required value="${pData.cycleStartDate || todayISO}" class="mt-1 block w-full bg-gray-700 border-gray-600 rounded-md sm:text-sm h-10 px-3">
+                                </div>
+                            </div>
+                        </fieldset>
+                        <fieldset>
+                            <legend class="text-base font-semibold mb-2 border-b border-gray-600 pb-2">Vardiya Düzeni</legend>
+                            <p class="text-xs text-gray-400 mb-2">Rotasyona dahil etmek için vardiyalara sıra numarası (1, 2, 3...) verin. 1, başlangıç vardiyasıdır.</p>
+                            <div class="space-y-3 pt-2">
+                                ${shiftBlocks}
+                            </div>
+                        </fieldset>
+                        <div class="pt-4">
+                             <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-lg shadow-lg transition-all transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed">${isEditing ? 'Güncelle' : 'Kaydet'}</button>
+                        </div>
+                    </form>
+                `;
+            }
+        }
+    };
+
+    document.addEventListener('DOMContentLoaded', () => App.init());
+    </script>
+</body>
+</html>
