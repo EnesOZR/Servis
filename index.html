@@ -93,10 +93,6 @@
         .toggle-checkbox:checked + .toggle-label {
             background-color: #4f46e5;
         }
-        #branding-banner {
-            user-select: none;
-            pointer-events: none;
-        }
     </style>
 </head>
 <body class="bg-gray-900 text-gray-200">
@@ -533,6 +529,7 @@
                         await services.loadCompaniesForDriver(driver.uid);
 
                         if (state.userCompanies.length === 0) {
+                             ui.showToast('Bu servise ait firma bulunamadı.', 'info');
                              state.loggedIn = true;
                         } else if (state.userCompanies.length === 1) {
                             handlers.selectCompany(state.userCompanies[0].id);
@@ -552,10 +549,19 @@
                 },
 
                 logout: async () => {
-                   if (state.auth.currentUser) {
+                    if (state.auth.currentUser) {
                         await state.auth.signOut();
                     }
-                    window.location.reload();
+                    Object.assign(state, {
+                        loggedIn: false,
+                        currentUser: null,
+                        userCompanies: [],
+                        selectedCompanyId: null,
+                        selectedCompanyName: '',
+                        allPassengers: [],
+                        visibleMarkers: [],
+                        isPanelOpen: false,
+                    });
                 },
                 
                 onCompanyChange: () => {
