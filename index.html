@@ -97,6 +97,10 @@
             user-select: none;
             pointer-events: none;
         }
+        /* Mobile scroll fix */
+        .left-panels {
+            touch-action: pan-y;
+        }
     </style>
 </head>
 <body class="bg-gray-900 text-gray-200">
@@ -164,7 +168,7 @@
             <div id="map"></div>
 
             <!-- UI Overlays -->
-            <div class="absolute top-4 left-4 right-4 sm:right-auto z-20 flex flex-col gap-4 sm:w-80">
+            <div class="absolute top-4 left-4 right-4 sm:right-auto z-20 flex flex-col gap-4 sm:w-80 left-panels">
                 <!-- User/Company Info -->
                 <div class="bg-black/70 backdrop-blur-sm rounded-lg shadow-lg overflow-hidden">
                     <div @click="state.isUserPanelOpen = !state.isUserPanelOpen" class="flex justify-between items-center p-3 cursor-pointer">
