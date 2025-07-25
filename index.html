@@ -162,6 +162,19 @@
                 </div>
              </div>
         </div>
+        
+        <!-- GPS Permission Modal -->
+        <div v-if="state.showGpsPermission" class="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
+             <div class="bg-gray-800 rounded-2xl shadow-2xl p-8 max-w-md w-full text-center">
+                <h3 class="text-2xl font-bold text-white text-center mb-4">Canlı Konum Paylaşımı</h3>
+                <p class="text-gray-300 mb-6">Yolcularınızın sizi harita üzerinde canlı olarak takip edebilmesi için konumunuzu paylaşmak ister misiniz?</p>
+                <div class="flex justify-center gap-4">
+                    <button @click="handlers.handleGpsPermission(false)" class="px-6 py-2 rounded-lg bg-gray-600 hover:bg-gray-500 font-semibold transition-colors">Daha Sonra</button>
+                    <button @click="handlers.handleGpsPermission(true)" class="px-6 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-semibold transition-colors">İzin Ver</button>
+                </div>
+             </div>
+        </div>
+
 
         <!-- Main Application UI -->
         <div v-if="state.loggedIn" class="relative h-screen w-screen">
@@ -180,7 +193,15 @@
                     </div>
                     <div v-show="state.isUserPanelOpen" class="p-4 pt-0 border-t border-gray-700">
                         <div v-if="state.currentUser.role === 'driver'" class="mt-4 space-y-2">
+                             <div class="flex items-center justify-between">
+                                <span class="font-semibold">Konumumu Paylaş</span>
+                                <div class="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
+                                    <input type="checkbox" @change="handlers.toggleLocationSharing" :checked="state.isSharingLocation" name="toggle" id="toggle" class="toggle-checkbox absolute block w-6 h-6 rounded-full bg-white border-4 appearance-none cursor-pointer"/>
+                                    <label for="toggle" class="toggle-label block overflow-hidden h-6 rounded-full bg-gray-300 cursor-pointer"></label>
+                                </div>
+                            </div>
                             <select v-model="state.selectedCompanyId" @change="handlers.onCompanyChange" class="w-full bg-gray-700 border-gray-600 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm h-10 px-2">
+                                <option :value="null" disabled>Firma Seçin</option>
                                 <option v-for="company in state.userCompanies" :value="company.id">{{ company.name }}</option>
                             </select>
                             <button @click="ui.openCompanyModal()" class="w-full text-sm bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-3 rounded-md transition-colors">
@@ -298,6 +319,12 @@
                 </div>
             </div>
 
+             <!-- Move Passenger Controls -->
+            <div v-if="state.moveMode.enabled" class="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 flex gap-4">
+                <button @click="handlers.cancelMovePassenger" class="px-6 py-3 rounded-lg bg-gray-700 hover:bg-gray-600 text-white font-bold shadow-lg">İptal</button>
+                <button @click="handlers.confirmMovePassenger" class="px-6 py-3 rounded-lg bg-green-600 hover:bg-green-700 text-white font-bold shadow-lg">Konumu Onayla</button>
+            </div>
+
             <!-- Confirm Dialog -->
             <div v-if="state.confirmDialog.show" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70">
                 <div class="bg-gray-800 rounded-2xl shadow-xl p-8 max-w-sm w-full text-center">
@@ -340,11 +367,17 @@
                 currentUser: null,
                 showRegister: false,
                 showCompanySelector: false,
+                showGpsPermission: false,
+                isSharingLocation: false,
+                locationWatchId: null,
+                driverLocationMarker: null,
+                driverLocationCircle: null,
+                isAutoFollowing: false,
                 userCompanies: [],
                 selectedCompanyId: null,
                 selectedCompanyName: '',
                 allPassengers: [],
-                visibleMarkers: [],
+                visibleMarkers: {},
                 tempMarker: null,
                 lastClickedLatLng: null,
                 isPanelOpen: false,
@@ -354,6 +387,8 @@
                 isFilterOpen: false, 
                 isUserPanelOpen: false, 
                 confirmDialog: { show: false, text: '', onConfirm: null },
+                moveMode: { enabled: false, passengerId: null, marker: null, originalLatLng: null },
+                locationUnsubscribe: null,
             });
 
             const forms = reactive({
@@ -391,13 +426,19 @@
                 initFirebase();
             });
             
-            watch(() => state.selectedCompanyId, (newId) => {
+            watch(() => state.selectedCompanyId, (newId, oldId) => {
                 if (newId && state.currentUser) {
                     const company = state.userCompanies.find(c => c.id === newId);
-                    if(company) {
-                        state.selectedCompanyName = company.name;
+                    if(company) state.selectedCompanyName = company.name;
+                    
+                    if (state.currentUser.role === 'driver') {
+                        services.loadPassengers(state.currentUser.uid, newId);
+                        if (state.isSharingLocation) {
+                           services.updateDriverLocation(state.currentUser.uid, { ...state.driverLocationMarker.getLatLng(), accuracy: state.driverLocationCircle.getRadius() });
+                        }
+                    } else if (state.currentUser.role === 'passenger') {
+                        services.listenToDriverLocation(state.currentUser.uid);
                     }
-                    services.loadPassengers(state.currentUser.uid, newId);
                 }
             });
 
@@ -406,25 +447,40 @@
                     await nextTick();
                     initMap();
                     await services.loadCompaniesForDriver(state.currentUser.uid);
+
                     if (state.userCompanies.length > 0) {
                         if (!state.selectedCompanyId) {
                            state.selectedCompanyId = state.userCompanies[0].id;
                         }
-                    } else {
-                         services.loadPassengers(state.currentUser.uid, null);
+                    } else if (state.currentUser.role === 'driver') {
+                       state.selectedCompanyId = null;
+                       services.loadPassengers(state.currentUser.uid, null);
                     }
+                    
+                    if(state.currentUser.role === 'driver' && !localStorage.getItem('gpsPermissionAsked')) {
+                        state.showGpsPermission = true;
+                        localStorage.setItem('gpsPermissionAsked', 'true');
+                    }
+                    if(state.currentUser.role === 'passenger') {
+                        services.listenToDriverLocation(state.currentUser.uid);
+                    }
+
                 } else {
                     if (state.map) {
                         state.map.remove();
                         state.map = null;
                     }
+                    // Reset state on logout
+                    Object.assign(state, {
+                        loggedIn: false, currentUser: null, userCompanies: [], selectedCompanyId: null,
+                        allPassengers: [], visibleMarkers: {}, isPanelOpen: false, showCompanySelector: false,
+                        isSharingLocation: false, locationWatchId: null, driverLocationMarker: null, driverLocationCircle: null,
+                    });
                 }
             });
 
             watch(() => forms.passenger.shifts, (newShifts) => {
-                if (!state.isPanelOpen || state.panelMode !== 'passenger' || !newShifts) {
-                    return;
-                }
+                if (!state.isPanelOpen || state.panelMode !== 'passenger' || !newShifts) return;
                 const orderedShifts = newShifts.filter(s => s.order).sort((a, b) => a.order - b.order);
                 if (orderedShifts.length === 0) {
                     forms.passenger.currentShiftKey = null;
@@ -433,11 +489,7 @@
                 const currentSelectionIsValid = orderedShifts.some(s => s.key === forms.passenger.currentShiftKey);
                 if (!currentSelectionIsValid) {
                     const shiftWithOrder1 = orderedShifts.find(s => s.order === 1);
-                    if (shiftWithOrder1) {
-                        forms.passenger.currentShiftKey = shiftWithOrder1.key;
-                    } else {
-                        forms.passenger.currentShiftKey = orderedShifts[0].key;
-                    }
+                    forms.passenger.currentShiftKey = shiftWithOrder1 ? shiftWithOrder1.key : orderedShifts[0].key;
                 }
             }, { deep: true });
 
@@ -448,9 +500,7 @@
                     projectId: "enes-ozer",
                     storageBucket: "enes-ozer.appspot.com",
                 };
-                if (!firebase.apps.length) {
-                    firebase.initializeApp(firebaseConfig);
-                }
+                if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
                 state.db = firebase.firestore();
                 state.auth = firebase.auth();
             };
@@ -465,21 +515,81 @@
                     state.map.on('click', handlers.onMapClick);
                 }
             };
-
+            
             const handlers = {
-                toggleDay(dayKey) {
-                    const index = forms.passenger.holidayDays.indexOf(dayKey);
-                    if (index > -1) {
-                        forms.passenger.holidayDays.splice(index, 1);
-                    } else {
-                        forms.passenger.holidayDays.push(dayKey);
+                handleGpsPermission(agreed) {
+                    state.showGpsPermission = false;
+                    if(agreed) {
+                        state.isSharingLocation = true;
+                        handlers.toggleLocationSharing({ target: { checked: true } });
                     }
                 },
+
+                toggleLocationSharing(event) {
+                    const shouldShare = event.target.checked;
+                    state.isSharingLocation = shouldShare;
+
+                    if (shouldShare) {
+                        if (!state.selectedCompanyId && state.currentUser.role === 'driver') {
+                            ui.showToast('Lütfen önce konum paylaşılacak firmayı seçin.', 'info');
+                            state.isSharingLocation = false;
+                            event.target.checked = false;
+                            return;
+                        }
+                        state.map.locate({ watch: true, enableHighAccuracy: true });
+                        state.map.on('locationfound', handlers.onLocationFound);
+                        state.map.on('locationerror', handlers.onLocationError);
+                    } else {
+                        state.map.stopLocate();
+                        state.map.off('locationfound', handlers.onLocationFound);
+                        state.map.off('locationerror', handlers.onLocationError);
+                        if (state.driverLocationMarker) {
+                            state.map.removeLayer(state.driverLocationMarker);
+                            state.driverLocationMarker = null;
+                        }
+                        if (state.driverLocationCircle) {
+                            state.map.removeLayer(state.driverLocationCircle);
+                            state.driverLocationCircle = null;
+                        }
+                        services.updateDriverLocation(state.currentUser.uid, null);
+                    }
+                },
+
+                onLocationFound(e) {
+                    const latlng = e.latlng;
+                    const radius = e.accuracy;
+                    const driverIcon = L.divIcon({
+                        className: 'leaflet-div-icon',
+                        html: `<i class="fas fa-shuttle-van text-blue-500" style="font-size: 2.5rem; text-shadow: 1px 1px 3px rgba(0,0,0,0.5);"></i>`,
+                        iconSize: [40, 40],
+                        iconAnchor: [20, 20]
+                    });
+
+                    if (!state.driverLocationMarker) {
+                        state.driverLocationMarker = L.marker(latlng, { icon: driverIcon }).addTo(state.map);
+                        state.driverLocationCircle = L.circle(latlng, radius).addTo(state.map);
+                    } else {
+                        state.driverLocationMarker.setLatLng(latlng);
+                        state.driverLocationCircle.setLatLng(latlng);
+                        state.driverLocationCircle.setRadius(radius);
+                    }
+                    services.updateDriverLocation(state.currentUser.uid, { lat: latlng.lat, lng: latlng.lng, accuracy: radius });
+                },
+
+                onLocationError(e) {
+                    ui.showToast(`Konum Hatası: ${e.message}`, 'error');
+                    state.isSharingLocation = false;
+                },
+
+                toggleDay(dayKey) {
+                    const index = forms.passenger.holidayDays.indexOf(dayKey);
+                    if (index > -1) forms.passenger.holidayDays.splice(index, 1);
+                    else forms.passenger.holidayDays.push(dayKey);
+                },
+
                 registerDriver: async () => {
                     const { name, plate, password } = forms.driverRegister;
-                    if (!name || !plate || !password) return ui.showToast('Tüm alanlar zorunludur.', 'error');
                     if (password.length < 6) return ui.showToast('Şifre en az 6 karakter olmalıdır.', 'error');
-
                     try {
                         const userCredential = await state.auth.createUserWithEmailAndPassword(`${plate.toLowerCase().replace(/\s/g, '')}@servis.app`, password);
                         await state.db.collection('drivers').doc(userCredential.user.uid).set({
@@ -488,20 +598,13 @@
                         });
                         ui.showToast('Kayıt başarılı! Giriş yapabilirsiniz.', 'success');
                         state.showRegister = false;
-                        forms.driverRegister = {};
                     } catch (error) {
-                        console.error("Registration Error:", error);
-                        if (error.code === 'auth/email-already-in-use') {
-                             ui.showToast('Bu plaka zaten kayıtlı.', 'error');
-                        } else {
-                             ui.showToast('Kayıt sırasında bir hata oluştu.', 'error');
-                        }
+                         ui.showToast(error.code === 'auth/email-already-in-use' ? 'Bu plaka zaten kayıtlı.' : 'Kayıt sırasında bir hata oluştu.', 'error');
                     }
                 },
 
                 loginDriver: async () => {
                     const { plate, password } = forms.driverLogin;
-                    if (!plate || !password) return ui.showToast('Plaka ve şifre zorunludur.', 'error');
                     try {
                         const userCredential = await state.auth.signInWithEmailAndPassword(`${plate.toLowerCase().replace(/\s/g, '')}@servis.app`, password);
                         const driverDoc = await state.db.collection('drivers').doc(userCredential.user.uid).get();
@@ -509,16 +612,13 @@
                         
                         state.currentUser = { ...driverDoc.data(), uid: userCredential.user.uid, role: 'driver' };
                         state.loggedIn = true; 
-                        
                     } catch (error) {
-                        console.error("Driver Login Error:", error);
                         ui.showToast('Plaka veya şifre hatalı.', 'error');
                     }
                 },
 
                 loginPassenger: async () => {
                     const { plate } = forms.passengerLogin;
-                    if (!plate) return ui.showToast('Plaka zorunludur.', 'error');
                     try {
                         const driverQuery = await state.db.collection('drivers').where('plate', '==', plate.toUpperCase()).limit(1).get();
                         if (driverQuery.empty) return ui.showToast('Bu plakaya sahip bir servis bulunamadı.', 'error');
@@ -537,7 +637,6 @@
                             state.showCompanySelector = true;
                         }
                     } catch (error) {
-                        console.error("Passenger Login Error:", error);
                         ui.showToast('Servis aranırken bir hata oluştu.', 'error');
                     }
                 },
@@ -549,24 +648,27 @@
                 },
 
                 logout: async () => {
-                   if (state.auth.currentUser) {
-                        await state.auth.signOut();
-                    }
-                    window.location.reload();
+                   if (state.isSharingLocation) {
+                        handlers.toggleLocationSharing({ target: { checked: false } });
+                   }
+                   if (state.auth.currentUser) await state.auth.signOut();
+                   state.loggedIn = false; // This will trigger the watcher to reset the state
                 },
                 
-                onCompanyChange: () => {
-                    if (state.selectedCompanyId) {
-                       services.loadPassengers(state.currentUser.uid, state.selectedCompanyId);
+                onCompanyChange: (event) => {
+                    const newId = event.target.value;
+                    if(state.isSharingLocation){
+                        handlers.toggleLocationSharing({ target: { checked: false } });
+                        document.getElementById('toggle').checked = false;
+                        ui.showToast('Firma değiştirildiği için konum paylaşımı durduruldu.', 'info');
                     }
+                    state.selectedCompanyId = newId;
                 },
                 
                 saveCompany: async () => {
                     if (!forms.company.name) return ui.showToast('Firma adı zorunludur.', 'error');
-                    
                     const companyData = { name: forms.company.name };
                     const driverId = state.currentUser.uid;
-
                     try {
                         if (state.editingId) {
                             await state.db.collection('drivers').doc(driverId).collection('companies').doc(state.editingId).update(companyData);
@@ -579,7 +681,6 @@
                         await services.loadCompaniesForDriver(driverId);
                         ui.closePanel();
                     } catch (error) {
-                        console.error("Error saving company:", error);
                         ui.showToast('Firma kaydedilirken hata oluştu.', 'error');
                     }
                 },
@@ -589,7 +690,6 @@
                     const driverId = state.currentUser.uid;
                     if (!formState.name) return ui.showToast('Yolcu adı zorunludur.', 'error');
                     if (!state.selectedCompanyId) return ui.showToast('Lütfen önce bir firma seçin.', 'error');
-                    
                     const orderedShifts = formState.shifts.filter(s => s.order).sort((a,b) => a.order - b.order);
                     if (orderedShifts.length === 0) return ui.showToast('En az bir vardiya için sıra numarası girilmelidir.', 'error');
                     if (!formState.currentShiftKey) return ui.showToast('Lütfen mevcut vardiyanızı seçin.', 'error');
@@ -627,46 +727,23 @@
                         }
                         ui.closePanel();
                     } catch (error) {
-                        console.error("Error saving passenger:", error);
                         ui.showToast('Yolcu kaydedilirken hata oluştu.', 'error');
                     }
                 },
 
                 onMapClick: (e) => {
-                    if (e.originalEvent.target.closest('.leaflet-marker-icon')) return;
-                    if (state.isPanelOpen || (state.map._popup && state.map._popup.isOpen())) return;
+                    if (e.originalEvent.target.closest('.leaflet-marker-icon') || state.isPanelOpen || (state.map._popup && state.map._popup.isOpen())) return;
                     if (!state.selectedCompanyId) return ui.showToast('Lütfen önce yolcu ekleyeceğiniz firmayı seçin.', 'info');
-                    
                     if (state.tempMarker) state.map.removeLayer(state.tempMarker);
-
                     state.lastClickedLatLng = e.latlng;
                     const tempIcon = L.divIcon({
                         className: 'leaflet-div-icon',
-                        html: `
-                            <div class="relative">
-                                <i class="fas fa-map-pin text-blue-500" style="font-size: 3rem; text-shadow: 1px 1px 3px rgba(0,0,0,0.4);"></i>
-                                <button id="confirm-location-btn" class="absolute top-0 right-0 bg-green-500 text-white w-7 h-7 rounded-full flex items-center justify-center shadow-lg hover:bg-green-600 transform -translate-y-1/2 translate-x-1/2">
-                                    <i class="fas fa-check"></i>
-                                </button>
-                            </div>`,
-                        iconSize: [48, 48],
-                        iconAnchor: [12, 42]
+                        html: `<div class="relative"><i class="fas fa-map-pin text-blue-500" style="font-size: 3rem; text-shadow: 1px 1px 3px rgba(0,0,0,0.4);"></i><button id="confirm-location-btn" class="absolute top-0 right-0 bg-green-500 text-white w-7 h-7 rounded-full flex items-center justify-center shadow-lg hover:bg-green-600 transform -translate-y-1/2 translate-x-1/2"><i class="fas fa-check"></i></button></div>`,
+                        iconSize: [48, 48], iconAnchor: [12, 42]
                     });
-                    
-                    state.tempMarker = L.marker(e.latlng, { 
-                        icon: tempIcon,
-                        draggable: true 
-                    }).addTo(state.map);
-
-                    state.tempMarker.on('dragend', (event) => {
-                        state.lastClickedLatLng = event.target.getLatLng();
-                    });
-                    
-                    setTimeout(() => {
-                        document.getElementById('confirm-location-btn')?.addEventListener('click', () => {
-                             ui.openPassengerModal();
-                        });
-                    }, 0);
+                    state.tempMarker = L.marker(e.latlng, { icon: tempIcon, draggable: true }).addTo(state.map);
+                    state.tempMarker.on('dragend', (event) => { state.lastClickedLatLng = event.target.getLatLng(); });
+                    setTimeout(() => { document.getElementById('confirm-location-btn')?.addEventListener('click', () => { ui.openPassengerModal(); }); }, 0);
                 },
 
                 onFilterChange: (filter) => {
@@ -677,13 +754,9 @@
                             for (const key in filters.shifts) filters.shifts[key] = false;
                         }
                     } else {
-                        if (filters.active || filters.offDay || Object.values(filters.shifts).some(v => v)) {
-                            filters.all = false;
-                        }
+                        if (filters.active || filters.offDay || Object.values(filters.shifts).some(v => v)) filters.all = false;
                     }
-                    if (!filters.active && !filters.offDay && !Object.values(filters.shifts).some(v => v)) {
-                        filters.all = true;
-                    }
+                    if (!filters.active && !filters.offDay && !Object.values(filters.shifts).some(v => v)) filters.all = true;
                     ui.renderMarkers();
                 },
                 
@@ -712,55 +785,124 @@
                     const driverId = state.currentUser.uid;
                     const user = state.auth.currentUser;
                     if (!driverId || !user) return ui.showToast('Kullanıcı bulunamadı.', 'error');
-                    
                     try {
                         const passengersSnapshot = await state.db.collection('drivers').doc(driverId).collection('passengers').get();
-                        const passengerDeletions = passengersSnapshot.docs.map(doc => doc.ref.delete());
-                        await Promise.all(passengerDeletions);
-
+                        await Promise.all(passengersSnapshot.docs.map(doc => doc.ref.delete()));
                         const companiesSnapshot = await state.db.collection('drivers').doc(driverId).collection('companies').get();
-                        const companyDeletions = companiesSnapshot.docs.map(doc => doc.ref.delete());
-                        await Promise.all(companyDeletions);
-
+                        await Promise.all(companiesSnapshot.docs.map(doc => doc.ref.delete()));
                         await state.db.collection('drivers').doc(driverId).delete();
-
                         await user.delete();
-
                         ui.showToast('Hesabınız başarıyla silindi.', 'success');
                         handlers.logout();
-
                     } catch (error) {
-                        console.error("Error deleting account:", error);
                         ui.showToast('Hesap silinirken bir hata oluştu. Lütfen tekrar giriş yapıp deneyin.', 'error');
                     } finally {
                          state.confirmDialog.show = false;
                     }
                 },
+                
+                startMovePassenger(passengerId) {
+                    const marker = state.visibleMarkers[passengerId];
+                    if (!marker) return;
+                    state.map.closePopup();
+                    state.moveMode = {
+                        enabled: true,
+                        passengerId: passengerId,
+                        marker: marker,
+                        originalLatLng: marker.getLatLng()
+                    };
+                    marker.dragging.enable();
+                },
+
+                confirmMovePassenger: async () => {
+                    const { passengerId, marker } = state.moveMode;
+                    if (!passengerId || !marker) return;
+                    const newLatLng = marker.getLatLng();
+                    try {
+                        await state.db.collection('drivers').doc(state.currentUser.uid).collection('passengers').doc(passengerId).update({
+                            location: { lat: newLatLng.lat, lng: newLatLng.lng }
+                        });
+                        ui.showToast('Konum güncellendi.', 'success');
+                    } catch (error) {
+                        ui.showToast('Konum güncellenemedi.', 'error');
+                        marker.setLatLng(state.moveMode.originalLatLng);
+                    } finally {
+                        marker.dragging.disable();
+                        state.moveMode.enabled = false;
+                    }
+                },
+                
+                cancelMovePassenger() {
+                    const { marker, originalLatLng } = state.moveMode;
+                    if (marker && originalLatLng) {
+                        marker.setLatLng(originalLatLng);
+                        marker.dragging.disable();
+                    }
+                    state.moveMode.enabled = false;
+                },
 
                 onConfirm: () => {
-                    if (typeof state.confirmDialog.onConfirm === 'function') {
-                        state.confirmDialog.onConfirm();
-                    }
+                    if (typeof state.confirmDialog.onConfirm === 'function') state.confirmDialog.onConfirm();
                 },
             };
 
             const services = {
+                listenToDriverLocation: (driverId) => {
+                    if (state.locationUnsubscribe) state.locationUnsubscribe();
+                    state.locationUnsubscribe = state.db.collection('drivers').doc(driverId).onSnapshot(doc => {
+                        const data = doc.data();
+                        const location = data?.liveLocation;
+                        
+                        if (location && location.companyId === state.selectedCompanyId) {
+                            const latlng = { lat: location.lat, lng: location.lng };
+                            const driverIcon = L.divIcon({
+                                className: 'leaflet-div-icon',
+                                html: `<i class="fas fa-shuttle-van text-blue-500" style="font-size: 2.5rem; text-shadow: 1px 1px 3px rgba(0,0,0,0.5);"></i>`,
+                                iconSize: [40, 40], iconAnchor: [20, 20]
+                            });
+
+                            if (!state.driverLocationMarker) {
+                                state.driverLocationMarker = L.marker(latlng, { icon: driverIcon, zIndexOffset: 1000 }).addTo(state.map);
+                                state.driverLocationCircle = L.circle(latlng, location.accuracy).addTo(state.map);
+                            } else {
+                                state.driverLocationMarker.setLatLng(latlng);
+                                state.driverLocationCircle.setLatLng(latlng).setRadius(location.accuracy);
+                            }
+                        } else {
+                            if (state.driverLocationMarker) {
+                                state.map.removeLayer(state.driverLocationMarker);
+                                state.driverLocationMarker = null;
+                            }
+                            if (state.driverLocationCircle) {
+                                state.map.removeLayer(state.driverLocationCircle);
+                                state.driverLocationCircle = null;
+                            }
+                        }
+                    });
+                },
+
+                updateDriverLocation: async (driverId, locationData) => {
+                    const locationPayload = locationData ? { ...locationData, companyId: state.selectedCompanyId } : null;
+                    await state.db.collection('drivers').doc(driverId).update({
+                        liveLocation: locationPayload
+                    });
+                },
                 loadCompaniesForDriver: async (uid) => {
                     const snapshot = await state.db.collection('drivers').doc(uid).collection('companies').get();
                     state.userCompanies = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 },
 
                 loadPassengers: (driverId, companyId) => {
-                    if (!driverId) return;
-                    let query = state.db.collection('drivers').doc(driverId).collection('passengers');
-                    if (companyId) {
-                        query = query.where('companyId', '==', companyId);
+                    if (!driverId || !companyId) {
+                        state.allPassengers = [];
+                        ui.renderMarkers();
+                        return;
                     }
+                    let query = state.db.collection('drivers').doc(driverId).collection('passengers').where('companyId', '==', companyId);
                     query.onSnapshot(snapshot => {
                             state.allPassengers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                             ui.renderMarkers();
                         }, error => {
-                            console.error("Error fetching passengers:", error);
                             ui.showToast("Yolcu verileri alınamadı.", "error");
                         });
                 },
@@ -773,9 +915,7 @@
                     state.panelMode = 'company';
                     state.editingId = company ? company.id : null;
                     state.formTitle = company ? 'Firmayı Düzenle' : 'Yeni Firma Ekle';
-                    forms.company = {
-                        name: company ? company.name : '',
-                    };
+                    forms.company = { name: company ? company.name : '' };
                 },
 
                 openPassengerModal: (passenger = null) => {
@@ -784,7 +924,6 @@
                     state.panelMode = 'passenger';
                     state.editingId = passenger ? passenger.id : null;
                     state.formTitle = passenger ? 'Yolcu Bilgilerini Düzenle' : 'Yeni Yolcu Ekle';
-
                     const defaultShifts = [
                         { key: 'morning', name: "Sabah", start: '08:00', end: '16:00', order: null },
                         { key: 'middle', name: "Orta", start: '16:00', end: '00:00', order: null },
@@ -798,26 +937,18 @@
                         });
                         const currentShift = utils.calculateCurrentShift(passenger, new Date());
                         const cycleDayInfo = utils.getCycleDayInfo(passenger, new Date());
-                        
                         forms.passenger = {
-                            name: passenger.name,
-                            holidayDays: passenger.holidayDays || [],
-                            cycleLengthDays: passenger.cycleLengthDays,
-                            shifts: passengerShifts,
+                            name: passenger.name, holidayDays: passenger.holidayDays || [],
+                            cycleLengthDays: passenger.cycleLengthDays, shifts: passengerShifts,
                             currentShiftKey: currentShift ? currentShift.key : null,
                             currentDayInCycle: cycleDayInfo.currentDayInCycle,
                         };
                     } else {
                         forms.passenger = {
-                            name: '',
-                            holidayDays: [],
-                            cycleLengthDays: 14,
-                            shifts: defaultShifts,
-                            currentShiftKey: null,
-                            currentDayInCycle: 1,
+                            name: '', holidayDays: [], cycleLengthDays: 14, shifts: defaultShifts,
+                            currentShiftKey: null, currentDayInCycle: 1,
                         };
                     }
-
                     if(state.map && state.map.closePopup) state.map.closePopup();
                 },
 
@@ -834,22 +965,20 @@
 
                 renderMarkers: () => {
                     if(!state.map) return;
-                    state.visibleMarkers.forEach(m => state.map.removeLayer(m));
-                    state.visibleMarkers = [];
+                    Object.values(state.visibleMarkers).forEach(m => state.map.removeLayer(m));
+                    state.visibleMarkers = {};
                     const now = new Date();
 
                     state.allPassengers.forEach(pData => {
                         const { status, shift } = utils.getMarkerStatus(pData, now);
-                        
                         const showAll = filters.all;
                         const showActive = filters.active && status === 'active';
                         const showOffDay = filters.offDay && status === 'off-day';
                         const showShiftKey = shift && filters.shifts[shift.key];
-
                         if (showAll || showActive || showOffDay || showShiftKey) {
                             const marker = utils.createPassengerMarker(pData, now);
                             marker.addTo(state.map);
-                            state.visibleMarkers.push(marker);
+                            state.visibleMarkers[pData.id] = marker;
                         }
                     });
                 },
@@ -871,49 +1000,31 @@
             const utils = {
                 getInitials: (name) => (name || '').split(' ').map(part => part[0]).join('').toUpperCase(),
                 getShiftColor: (shiftKey) => ({ morning: "#f59e0b", middle: "#3b82f6", night: "#8b5cf6" }[shiftKey] || "#6b7280"),
-                
                 calculateCycleFromUserInput: (formState, orderedShifts) => {
                     const today = new Date();
                     today.setHours(0,0,0,0);
-
                     const currentShiftIndex = orderedShifts.findIndex(s => s.key === formState.currentShiftKey);
                     const daysIntoCurrentBlock = formState.currentDayInCycle - 1;
-                    
                     const blockStartDate = new Date(today.getTime());
                     blockStartDate.setDate(today.getDate() - daysIntoCurrentBlock);
-                    
                     const totalDaysForPriorBlocks = currentShiftIndex * formState.cycleLengthDays;
-                    
                     const cycleStartDay = totalDaysForPriorBlocks + 1;
-
-                    return {
-                        cycleReferenceDate: blockStartDate.toISOString().split('T')[0],
-                        cycleStartDay: cycleStartDay
-                    }
+                    return { cycleReferenceDate: blockStartDate.toISOString().split('T')[0], cycleStartDay: cycleStartDay };
                 },
 
                 calculateCurrentShift: (passengerInfo, dateObject) => {
                     const { cycleReferenceDate, cycleLengthDays, cycleStartDay, shifts } = passengerInfo;
                     if (!cycleReferenceDate || !cycleLengthDays || !cycleStartDay || !shifts) return null;
-
-                    const sortedShifts = [...shifts]
-                        .filter(s => s.order)
-                        .sort((a, b) => a.order - b.order);
-
+                    const sortedShifts = [...shifts].filter(s => s.order).sort((a, b) => a.order - b.order);
                     if (sortedShifts.length === 0) return null;
-
                     const refDate = new Date(cycleReferenceDate);
                     const today = new Date(dateObject);
                     refDate.setHours(0, 0, 0, 0);
                     today.setHours(0, 0, 0, 0);
-                    
                     const diffDays = Math.floor((today - refDate) / (1000 * 60 * 60 * 24));
                     const totalDaysIntoPattern = (cycleStartDay - 1) + diffDays;
-                    
                     if (totalDaysIntoPattern < 0) return sortedShifts[0];
-
                     const shiftChanges = Math.floor(totalDaysIntoPattern / cycleLengthDays);
-                    
                     const newIndex = shiftChanges % sortedShifts.length;
                     return sortedShifts[newIndex];
                 },
@@ -927,14 +1038,9 @@
                     const today = new Date(dateObject);
                     refDate.setHours(0, 0, 0, 0);
                     today.setHours(0, 0, 0, 0);
-
                     const diffDays = Math.floor((today - refDate) / (1000 * 60 * 60 * 24));
                     const totalDaysIntoPattern = (cycleStartDay - 1) + diffDays;
-
-                    if (totalDaysIntoPattern < 0) {
-                        return { currentDayInCycle: '?', totalCycleDays: cycleLengthDays };
-                    }
-
+                    if (totalDaysIntoPattern < 0) return { currentDayInCycle: '?', totalCycleDays: cycleLengthDays };
                     const currentDayInCycle = (totalDaysIntoPattern % (cycleLengthDays || 1)) + 1;
                     return { currentDayInCycle, totalCycleDays: cycleLengthDays };
                 },
@@ -943,81 +1049,34 @@
                     const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
                     const today = dayNames[dateObject.getDay()];
                     const currentShiftForDisplay = utils.calculateCurrentShift(passengerInfo, dateObject);
-
                     if ((passengerInfo.holidayDays || []).includes(today) || !currentShiftForDisplay) {
                         return { status: 'off-day', shift: currentShiftForDisplay };
                     }
-                    
                     const nowHours = dateObject.getHours();
                     let activeShiftKey = null;
-
-                    if (nowHours >= 0 && nowHours < 8) {
-                        activeShiftKey = 'morning';
-                    } else if (nowHours >= 8 && nowHours < 16) {
-                        activeShiftKey = 'middle';
-                    } else { 
-                        activeShiftKey = 'night';
-                    }
-                    
+                    if (nowHours >= 0 && nowHours < 8) activeShiftKey = 'morning';
+                    else if (nowHours >= 8 && nowHours < 16) activeShiftKey = 'middle';
+                    else activeShiftKey = 'night';
                     const isActive = currentShiftForDisplay.key === activeShiftKey;
-
-                    return {
-                        status: isActive ? 'active' : 'normal',
-                        shift: currentShiftForDisplay
-                    };
+                    return { status: isActive ? 'active' : 'normal', shift: currentShiftForDisplay };
                 },
 
                 createPassengerMarker: (passengerInfo, dateObject) => {
                     const { status, shift: currentShift } = utils.getMarkerStatus(passengerInfo, dateObject);
                     const initials = utils.getInitials(passengerInfo.name);
                     const borderColor = status === 'active' ? '#22c55e' : (status === 'off-day' ? '#6b7280' : utils.getShiftColor(currentShift?.key));
-                    
                     const customIcon = L.divIcon({
                         className: status === 'active' ? 'marker-blink' : '',
                         html: `<div class="passenger-marker" style="border-color: ${borderColor};">${initials}</div>`,
                         iconSize: [44, 44], iconAnchor: [22, 22]
                     });
-                    const marker = L.marker(passengerInfo.location, { 
-                        icon: customIcon,
-                        draggable: state.currentUser.role === 'driver'
-                    });
-
-                    if (state.currentUser.role === 'driver') {
-                        marker.on('dragstart', () => {
-                            if (state.map) {
-                                state.map.dragging.disable();
-                                state.map.scrollWheelZoom.disable();
-                            }
-                        });
-                        marker.on('dragend', async (event) => {
-                            if (state.map) {
-                                state.map.dragging.enable();
-                                state.map.scrollWheelZoom.enable();
-                            }
-                            const newLatLng = event.target.getLatLng();
-                            try {
-                                await state.db.collection('drivers').doc(state.currentUser.uid).collection('passengers').doc(passengerInfo.id).update({
-                                    location: {
-                                        lat: newLatLng.lat,
-                                        lng: newLatLng.lng
-                                    }
-                                });
-                                ui.showToast(`${passengerInfo.name} konumu güncellendi.`, 'success');
-                            } catch (error) {
-                                console.error("Error updating location:", error);
-                                ui.showToast('Konum güncellenirken bir hata oluştu.', 'error');
-                                marker.setLatLng(passengerInfo.location);
-                            }
-                        });
-                    }
+                    const marker = L.marker(passengerInfo.location, { icon: customIcon });
 
                     const dayNames = { monday: "Pzt", tuesday: "Sal", wednesday: "Çar", thursday: "Per", friday: "Cum", saturday: "Cmt", sunday: "Paz" };
                     const shiftTimeInfo = currentShift ? `${currentShift.start} - ${currentShift.end}` : 'Vardiyasız';
-                    
                     const { currentDayInCycle, totalCycleDays } = utils.getCycleDayInfo(passengerInfo, dateObject);
                     const remainingDays = totalCycleDays - currentDayInCycle;
                     const cycleText = currentShift ? `(${currentDayInCycle}/${totalCycleDays})` : '';
-
                     let nextShiftText = 'Bilinmiyor';
                     if (currentShift && passengerInfo.shifts) {
                         const sortedShifts = [...passengerInfo.shifts].filter(s => s.order).sort((a, b) => a.order - b.order);
@@ -1028,29 +1087,24 @@
                                 const nextShift = sortedShifts[nextIndex];
                                 nextShiftText = `<span style="color:${utils.getShiftColor(nextShift.key)};">${nextShift.name}</span> (${remainingDays} gün sonra)`;
                             }
-                        } else if (sortedShifts.length === 1) {
-                            nextShiftText = 'Rotasyon yok';
-                        }
+                        } else if (sortedShifts.length === 1) nextShiftText = 'Rotasyon yok';
                     }
-
                     const holidayDaysText = (passengerInfo.holidayDays || []).map(dayKey => dayNames[dayKey]).join(', ');
-
                     let popupContent = `
                         <div class="text-gray-200">
                             <h3 class="text-lg font-bold text-white mb-2">${passengerInfo.name}</h3>
                             <p class="mb-1"><strong class="font-semibold text-gray-400">Vardiya:</strong> <span style="color:${utils.getShiftColor(currentShift?.key)};">${currentShift?.name || 'Bilinmiyor'} ${cycleText}</span></p>
-                            
                             <p class="text-sm"><strong class="font-semibold text-gray-400">Saat:</strong> ${shiftTimeInfo}</p>
                             <p class="text-sm mb-2"><strong class="font-semibold text-gray-400">İzin:</strong> ${holidayDaysText || 'Yok'}</p>
-
-                            <p class="mt-2 pt-2 border-t border-gray-600 text-sm"><strong class="font-semibold text-gray-400">Sonraki:</strong> ${nextShiftText}</p>
-                            `;
-                    
+                            <p class="mt-2 pt-2 border-t border-gray-600 text-sm"><strong class="font-semibold text-gray-400">Sonraki:</strong> ${nextShiftText}</p>`;
                     if (state.currentUser.role === 'driver') {
                         popupContent += `
                             <div class="flex gap-2 mt-3">
                                 <button onclick="app.vue.ui.openPassengerModal(app.vue.state.allPassengers.find(p => p.id === '${passengerInfo.id}'))" class="text-sm bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-1 px-3 rounded-md w-full">Düzenle</button>
                                 <button onclick="app.vue.handlers.deletePassenger('${passengerInfo.id}')" class="text-sm bg-red-600 hover:bg-red-700 text-white font-semibold py-1 px-3 rounded-md w-full">Sil</button>
+                            </div>
+                            <div class="mt-2">
+                                <button onclick="app.vue.handlers.startMovePassenger('${passengerInfo.id}')" class="w-full text-sm bg-gray-600 hover:bg-gray-500 text-white font-semibold py-1 px-3 rounded-md">Konumu Değiştir</button>
                             </div>`;
                     }
                     popupContent += `</div>`;
