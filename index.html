@@ -440,6 +440,7 @@
                         }
                     } else if (state.currentUser.role === 'passenger') {
                         services.listenToDriverLocation(state.currentUser.uid);
+                        services.loadPassengers(state.currentUser.uid, newId);
                     }
                 }
             });
