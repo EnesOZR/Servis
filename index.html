@@ -214,7 +214,7 @@
                         <div v-if="state.currentUser.role === 'passenger'" class="mt-4">
                             <h3 class="font-bold text-lg text-white">{{ state.selectedCompanyName }}</h3>
                         </div>
-                        <button @click="handlers.logout" class="mt-2 w-full text-sm bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-3 rounded-md transition-colors href="https://enesozr.github.io/Servis/"">
+                        <button @click="handlers.logout" class="mt-2 w-full text-sm bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-3 rounded-md transition-colors">
                             <i class="fas fa-sign-out-alt mr-1"></i> Çıkış Yap
                         </button>
                     </div>
@@ -427,9 +427,11 @@
             });
             
             watch(() => state.selectedCompanyId, (newId, oldId) => {
-                if (newId && state.currentUser) {
-                    const company = state.userCompanies.find(c => c.id === newId);
-                    if(company) state.selectedCompanyName = company.name;
+                if (state.currentUser) {
+                    if (newId) {
+                        const company = state.userCompanies.find(c => c.id === newId);
+                        if(company) state.selectedCompanyName = company.name;
+                    }
                     
                     if (state.currentUser.role === 'driver') {
                         services.loadPassengers(state.currentUser.uid, newId);
@@ -448,34 +450,28 @@
                     initMap();
                     await services.loadCompaniesForDriver(state.currentUser.uid);
 
-                    if (state.userCompanies.length > 0) {
-                        if (!state.selectedCompanyId) {
-                           state.selectedCompanyId = state.userCompanies[0].id;
-                        }
-                    } else if (state.currentUser.role === 'driver') {
-                       state.selectedCompanyId = null;
-                       services.loadPassengers(state.currentUser.uid, null);
-                    }
-                    
-                    if(state.currentUser.role === 'driver' && !localStorage.getItem('gpsPermissionAsked')) {
-                        state.showGpsPermission = true;
-                        localStorage.setItem('gpsPermissionAsked', 'true');
-                    }
                     if(state.currentUser.role === 'passenger') {
-                        services.listenToDriverLocation(state.currentUser.uid);
+                        if (state.userCompanies.length > 0) {
+                            if (state.userCompanies.length === 1) {
+                                handlers.selectCompany(state.userCompanies[0].id);
+                            } else {
+                                state.showCompanySelector = true;
+                            }
+                        } else {
+                            services.listenToDriverLocation(state.currentUser.uid);
+                        }
+                    } else { // Driver
+                        if (state.userCompanies.length > 0) {
+                            state.selectedCompanyId = state.userCompanies[0].id;
+                        } else {
+                            state.selectedCompanyId = null;
+                            services.loadPassengers(state.currentUser.uid, null);
+                        }
+                        if (!localStorage.getItem('gpsPermissionAsked')) {
+                            state.showGpsPermission = true;
+                            localStorage.setItem('gpsPermissionAsked', 'true');
+                        }
                     }
-
-                } else {
-                    if (state.map) {
-                        state.map.remove();
-                        state.map = null;
-                    }
-                    // Reset state on logout
-                    Object.assign(state, {
-                        loggedIn: false, currentUser: null, userCompanies: [], selectedCompanyId: null,
-                        allPassengers: [], visibleMarkers: {}, isPanelOpen: false, showCompanySelector: false,
-                        isSharingLocation: false, locationWatchId: null, driverLocationMarker: null, driverLocationCircle: null,
-                    });
                 }
             });
 
@@ -520,7 +516,8 @@
                 handleGpsPermission(agreed) {
                     state.showGpsPermission = false;
                     if(agreed) {
-                        state.isSharingLocation = true;
+                        const toggle = document.getElementById('toggle');
+                        if(toggle) toggle.checked = true;
                         handlers.toggleLocationSharing({ target: { checked: true } });
                     }
                 },
@@ -541,8 +538,8 @@
                         state.map.on('locationerror', handlers.onLocationError);
                     } else {
                         state.map.stopLocate();
-                        state.map.off('locationfound', handlers.onLocationFound);
-                        state.map.off('locationerror', handlers.onLocationError);
+                        state.map.off('locationfound');
+                        state.map.off('locationerror');
                         if (state.driverLocationMarker) {
                             state.map.removeLayer(state.driverLocationMarker);
                             state.driverLocationMarker = null;
@@ -566,7 +563,7 @@
                     });
 
                     if (!state.driverLocationMarker) {
-                        state.driverLocationMarker = L.marker(latlng, { icon: driverIcon }).addTo(state.map);
+                        state.driverLocationMarker = L.marker(latlng, { icon: driverIcon, zIndexOffset: 1000 }).addTo(state.map);
                         state.driverLocationCircle = L.circle(latlng, radius).addTo(state.map);
                     } else {
                         state.driverLocationMarker.setLatLng(latlng);
@@ -578,6 +575,8 @@
 
                 onLocationError(e) {
                     ui.showToast(`Konum Hatası: ${e.message}`, 'error');
+                    const toggle = document.getElementById('toggle');
+                    if(toggle) toggle.checked = false;
                     state.isSharingLocation = false;
                 },
 
@@ -626,16 +625,8 @@
                         const driverDoc = driverQuery.docs[0];
                         const driver = { ...driverDoc.data(), uid: driverDoc.id };
                         state.currentUser = { ...driver, role: 'passenger' };
+                        state.loggedIn = true;
                         
-                        await services.loadCompaniesForDriver(driver.uid);
-
-                        if (state.userCompanies.length === 0) {
-                             state.loggedIn = true;
-                        } else if (state.userCompanies.length === 1) {
-                            handlers.selectCompany(state.userCompanies[0].id);
-                        } else {
-                            state.showCompanySelector = true;
-                        }
                     } catch (error) {
                         ui.showToast('Servis aranırken bir hata oluştu.', 'error');
                     }
@@ -643,23 +634,28 @@
                 
                 selectCompany: (companyId) => {
                     state.selectedCompanyId = companyId;
-                    state.loggedIn = true; 
                     state.showCompanySelector = false;
                 },
 
                 logout: async () => {
-                   if (state.isSharingLocation) {
-                        handlers.toggleLocationSharing({ target: { checked: false } });
+                   try {
+                       if (state.isSharingLocation) {
+                            handlers.toggleLocationSharing({ target: { checked: false } });
+                       }
+                       await state.auth.signOut();
+                   } catch (error) {
+                       console.error("Error during sign out, reloading page anyway:", error);
+                   } finally {
+                       window.location.reload();
                    }
-                   if (state.auth.currentUser) await state.auth.signOut();
-                   state.loggedIn = false; // This will trigger the watcher to reset the state
                 },
                 
                 onCompanyChange: (event) => {
                     const newId = event.target.value;
                     if(state.isSharingLocation){
                         handlers.toggleLocationSharing({ target: { checked: false } });
-                        document.getElementById('toggle').checked = false;
+                        const toggle = document.getElementById('toggle');
+                        if(toggle) toggle.checked = false;
                         ui.showToast('Firma değiştirildiği için konum paylaşımı durduruldu.', 'info');
                     }
                     state.selectedCompanyId = newId;
