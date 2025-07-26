@@ -534,7 +534,13 @@
                             event.target.checked = false;
                             return;
                         }
-                        state.map.locate({ watch: true, enableHighAccuracy: true });
+                        // UPDATED: More accurate GPS settings
+                        state.map.locate({ 
+                            watch: true, 
+                            enableHighAccuracy: true,
+                            timeout: 10000, // 10 seconds
+                            maximumAge: 0   // Force fresh data
+                        });
                         state.map.on('locationfound', handlers.onLocationFound);
                         state.map.on('locationerror', handlers.onLocationError);
                     } else {
@@ -643,7 +649,9 @@
                        if (state.isSharingLocation) {
                             handlers.toggleLocationSharing({ target: { checked: false } });
                        }
-                       await state.auth.signOut();
+                       if (state.auth.currentUser) {
+                           await state.auth.signOut();
+                       }
                    } catch (error) {
                        console.error("Error during sign out, reloading page anyway:", error);
                    } finally {
